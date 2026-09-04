@@ -119,7 +119,7 @@ const FADE_DURATION_MS = 300;
         <div class="wrapper">
             <button type="button" title="${chrome.i18n.getMessage("sendCurrentMediaToGhostDownloader")}">
                 <svg class="icon" viewBox="0 0 20 20" aria-hidden="true">
-                    <path fill="currentColor" d="M10 2.5a.75.75 0 0 1 .75.75v7.69l2.72-2.72a.75.75 0 1 1 1.06 1.06l-4 4a.75.75 0 0 1-1.06 0l-4-4a.75.75 0 0 1 1.06-1.06l2.72 2.72V3.25A.75.75 0 0 1 10 2.5Zm-5.25 11a.75.75 0 0 1 .75.75v1.25h9v-1.25a.75.75 0 0 1 1.5 0v2a.75.75 0 0 1-.75.75H4.75A.75.75 0 0 1 4 16.25v-2a.75.75 0 0 1 .75-.75Z"/>
+                    <path fill="currentColor" d="M10 2.5a.75.75 0 0 1 .75.75v7.69l2.72-2.72a.75.75 0 1 1 1.06 1.06l-4 4a.75.75 0 0 1-1.06 0l-4-4a.75.75 0 0 1 1.06-1.06l2.72 2.72V3.25A.75.75 0 0 1"/>
                 </svg>
                 <span class="label">${chrome.i18n.getMessage("downloadThisMedia")}</span>
                 <span class="status"></span>
@@ -144,6 +144,8 @@ const FADE_DURATION_MS = 300;
     if (!isVisible) { return; }
     isVisible = false;
     host.style.opacity = "0";
+    // also hide any open selection list
+    hideListContainer();
   }
 
   function resetIdleTimer(): void {
@@ -270,6 +272,136 @@ const FADE_DURATION_MS = 300;
     }
   }
 
+  // Helper: human-readable bytes
+  function formatBytes(bytes: number | undefined | null): string {
+    if (!bytes && bytes !== 0) return "";
+    let b = Number(bytes || 0);
+    if (!isFinite(b) || b <= 0) return "";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0;
+    while (b >= 1024 && i < units.length - 1) { b /= 1024; i += 1; }
+    return `${Math.round(b * 10) / 10}${units[i]}`;
+  }
+
+  // Helper: try common size fields on selection objects
+  function extractSizeFromSelection(sel: any): number | undefined {
+    if (!sel) return undefined;
+    // common fields: size, contentLength, contentLengthBytes, length, byteLength
+    const candidates = [sel.size, sel.contentLength, sel.contentLengthBytes, sel.length, sel.byteLength, sel.content_length];
+    for (const c of candidates) {
+      if (typeof c === "number" && isFinite(c) && c >= 0) return c;
+      if (typeof c === "string" && c !== "") {
+        const n = Number(c);
+        if (!Number.isNaN(n)) return n;
+      }
+    }
+    return undefined;
+  }
+
+  // Selection list container (inserted into shadow root). We create/destroy on demand.
+  let listContainer: HTMLElement | null = null;
+  let listHideTimer = 0;
+  function ensureListContainer() {
+    if (listContainer) return listContainer;
+    listContainer = document.createElement("div");
+    listContainer.className = "gd-multi-list";
+    const style = document.createElement("style");
+    style.textContent = `
+      .gd-multi-list {
+        margin-left: 0;
+        margin-top: 6px;
+        background: rgba(255,255,255,0.98);
+        border: 1px solid #d1d1d1;
+        border-radius: 6px;
+        box-shadow: 0 8px 20px rgba(0,0,0,0.18);
+        padding: 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-height: 280px;
+        overflow: auto;
+      }
+      .gd-multi-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        cursor: pointer;
+        padding: 6px 8px;
+        border-radius: 4px;
+        font: inherit;
+        color: #242424;
+        background: transparent;
+        text-align: left;
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      .gd-multi-item:hover { background: #f5f5f5; }
+      .gd-multi-item:disabled { opacity: 0.6; cursor: default; }
+      .gd-multi-item .title { overflow: hidden; text-overflow: ellipsis; padding-right: 8px; }
+      .gd-multi-item .size { color: #666; flex-shrink: 0; margin-left: 8px; }
+    `;
+    root.appendChild(style);
+    const wrapperEl = root.querySelector(".wrapper")!;
+    wrapperEl.after(listContainer);
+    return listContainer;
+  }
+
+  function hideListContainer() {
+    if (!listContainer) return;
+    if (listContainer.parentElement) listContainer.remove();
+    listContainer = null;
+    clearTimeout(listHideTimer);
+  }
+
+  function showSelectionList(items: Array<any>, sendOneSelection: (sel: any) => Promise<boolean>) {
+    const container = ensureListContainer();
+    container.innerHTML = "";
+    for (const it of items) {
+      const row = document.createElement("button");
+      row.className = "gd-multi-item";
+      row.type = "button";
+      const titleEl = document.createElement("span");
+      titleEl.className = "title";
+      const sizeEl = document.createElement("span");
+      sizeEl.className = "size";
+
+      const title = it.filename || it.title || it.url || chrome.i18n.getMessage("downloadThisMedia");
+      titleEl.textContent = title;
+
+      const sizeNum = extractSizeFromSelection(it);
+      sizeEl.textContent = sizeNum ? formatBytes(sizeNum) : "";
+
+      row.appendChild(titleEl);
+      row.appendChild(sizeEl);
+
+      row.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const buttons = Array.from(container.querySelectorAll("button")) as HTMLButtonElement[];
+        buttons.forEach((b) => b.disabled = true);
+        (button as HTMLButtonElement).disabled = true;
+        label.textContent = chrome.i18n.getMessage("sending");
+        setStatus("");
+        try {
+          const ok = await sendOneSelection(it);
+          setStatus(ok ? chrome.i18n.getMessage("sent") : chrome.i18n.getMessage("errorSendFailed"), !ok);
+        } catch (e) {
+          const message = e instanceof Error ? e.message : chrome.i18n.getMessage("errorSendFailed");
+          setStatus(message, true);
+        } finally {
+          label.textContent = chrome.i18n.getMessage("downloadThisMedia");
+          (button as HTMLButtonElement).disabled = false;
+          hideListContainer();
+        }
+      });
+
+      container.appendChild(row);
+    }
+
+    clearTimeout(listHideTimer);
+    listHideTimer = window.setTimeout(() => hideListContainer(), 10000);
+  }
+
   let downloadInFlight = false;
   async function downloadMedia(): Promise<void> {
     if (downloadInFlight) { return; }
@@ -307,19 +439,39 @@ const FADE_DURATION_MS = 300;
         setStatus(chrome.i18n.getMessage("errorCannotLocateMedia"), true);
         return;
       }
-      const result = await chrome.runtime.sendMessage({
-        type: "page_download_media",
-        selection: resolution.selection,
-        href: location.href,
-        title: document.title,
-      });
-      const ok = Boolean(result?.ok);
-      setStatus(ok ? chrome.i18n.getMessage("sent") : result?.message || chrome.i18n.getMessage("errorSendFailed"), !ok);
-      pageMedia.markDispatchResult?.(media, ok, result?.message || "");
+
+      // resolution.selection may be a single selection or an array
+      const selectionArray = Array.isArray((resolution as any).selection) ? (resolution as any).selection : [(resolution as any).selection];
+
+      if (selectionArray.length === 0) {
+        setStatus(chrome.i18n.getMessage("errorCannotLocateMedia"), true);
+        return;
+      }
+
+      // Helper to send one selection and mark result
+      const sendSingle = async (sel: any) => {
+        const result = await chrome.runtime.sendMessage({
+          type: "page_download_media",
+          selection: sel,
+          href: location.href,
+          title: document.title,
+        });
+        const ok = Boolean(result?.ok);
+        pageMedia.markDispatchResult?.(media, ok, result?.message || "");
+        return ok;
+      };
+
+      if (selectionArray.length === 1) {
+        const ok = await sendSingle(selectionArray[0]);
+        setStatus(ok ? chrome.i18n.getMessage("sent") : chrome.i18n.getMessage("errorSendFailed"), !ok);
+      } else {
+        // 多个资源：展示列表而不是弹提示
+        showSelectionList(selectionArray, sendSingle);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : chrome.i18n.getMessage("errorSendFailed");
       setStatus(message, true);
-      pageMedia.markDispatchResult?.(media, false, message);
+      window.__gdPageMedia?.markDispatchResult?.(media, false, message);
     } finally {
       label.textContent = chrome.i18n.getMessage("downloadThisMedia");
       (button as HTMLButtonElement).disabled = false;
