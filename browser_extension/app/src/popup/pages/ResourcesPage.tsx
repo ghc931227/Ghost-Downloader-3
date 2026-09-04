@@ -1,5 +1,5 @@
 import type {SelectTabData} from "@fluentui/react-components";
-import {Badge, Button, Caption1, Card, makeStyles, Select, Tab, TabList} from "@fluentui/react-components";
+import {Badge, Button, Caption1, Card, makeStyles, Checkbox, Tab, TabList} from "@fluentui/react-components";
 import {
     ArrowDownloadRegular,
     CheckboxCheckedRegular,
@@ -11,7 +11,7 @@ import {
 } from "@fluentui/react-icons";
 import {useEffect, useMemo, useState} from "react";
 
-import type {Resource, ResourceCollectionState, ResourceFilter, ResourceScope} from "../../shared/types";
+import type {Resource, ResourceCollectionState, ResourceFilter} from "../../shared/types";
 import {canUseOnlineMergeSelection, fileExtension, filenameFromUrl, filterResources, isDashSegment} from "../../shared/utils";
 import {EmptyState} from "../components/EmptyState";
 import {ResourceCard} from "../components/ResourceCard";
@@ -33,8 +33,10 @@ const useStyles = makeStyles({
   toolbarSpacer: {
     flex: 1,
   },
-  scopeSelect: {
-    minWidth: "100px",
+  scopeCheckbox: {
+    minWidth: "120px",
+    display: "flex",
+    alignItems: "center",
   },
   filterTabs: {
     minWidth: 0,
@@ -72,16 +74,17 @@ const RESOURCE_FILTERS: Array<{ key: ResourceFilter; label: string }> = [
   { key: "audio", label: chrome.i18n.getMessage("filterAudio") },
 ];
 
-function emptyCopy(scope: ResourceScope, state: ResourceCollectionState, message: string) {
-  if (scope === "current" && state === "restoring") {
+function emptyCopy(showCurrentOnly: boolean, state: ResourceCollectionState, message: string) {
+  if (showCurrentOnly && state === "restoring") {
     return { title: chrome.i18n.getMessage("restoringResourcesTitle"), description: message || chrome.i18n.getMessage("restoringResourcesDescription") };
   }
-  if (scope === "current" && state === "unavailable") {
+  if (showCurrentOnly && state === "unavailable") {
     return { title: chrome.i18n.getMessage("resourceBridgeUnavailableTitle"), description: message || chrome.i18n.getMessage("resourceBridgeUnavailableDescription") };
   }
-  if (scope === "current") {
+  if (showCurrentOnly) {
     return { title: chrome.i18n.getMessage("emptyCurrentResourcesTitle"), description: chrome.i18n.getMessage("emptyCurrentResourcesDescription") };
   }
+  // 当为“展示所有页面”时，沿用原来 other 的 empty 文案（也可以新增 i18n key）
   return { title: chrome.i18n.getMessage("emptyOtherResourcesTitle"), description: chrome.i18n.getMessage("emptyOtherResourcesDescription") };
 }
 
@@ -107,13 +110,19 @@ export function ResourcesPage({
   onMergeResources: (resourceIds: string[]) => Promise<boolean>;
 }) {
   const styles = useStyles();
-  const [scope, setScope] = useState<ResourceScope>("current");
+  // showCurrentOnly: 勾选 = 仅当前页面 (默认 true)
+  const [showCurrentOnly, setShowCurrentOnly] = useState<boolean>(true);
   const [filter, setFilter] = useState<ResourceFilter>("all");
   const [selectedResourceIds, setSelectedResourceIds] = useState<ReadonlySet<string>>(() => new Set());
   const [isDashExpanded, setDashExpanded] = useState(false);
   const [isHlsExpanded, setHlsExpanded] = useState(false);
 
-  const scopedResources = scope === "current" ? currentResources : otherResources;
+  // 计算作用域内的资源：勾选时仅当前页面，否则合并所有页面资源
+  const scopedResources = useMemo(() => {
+    if (showCurrentOnly) { return currentResources; }
+    return [...currentResources, ...otherResources];
+  }, [currentResources, otherResources, showCurrentOnly]);
+
   const filteredResources = useMemo(() => filterResources(scopedResources, filter), [filter, scopedResources]);
 
   const hasM3u8 = useMemo(
@@ -155,7 +164,7 @@ export function ResourcesPage({
   );
   const canMerge = connected && canUseOnlineMergeSelection(selectedResources);
   const hasSelection = selectedResources.length > 0;
-  const emptyState = emptyCopy(scope, resourceState, resourceStateMessage);
+  const emptyState = emptyCopy(showCurrentOnly, resourceState, resourceStateMessage);
 
   useEffect(() => {
     setSelectedResourceIds((current) => {
@@ -231,21 +240,20 @@ export function ResourcesPage({
           ))}
         </TabList>
         <div className={styles.toolbarSpacer} />
-        <Select
-          className={styles.scopeSelect}
-          size="small"
-          value={scope}
-          onChange={(_e, data) => setScope(data.value as ResourceScope)}
-        >
-          <option value="current">{chrome.i18n.getMessage("scopeCurrentPage")}</option>
-          <option value="other">{chrome.i18n.getMessage("scopeOtherPages")}</option>
-        </Select>
+        <div className={styles.scopeCheckbox}>
+          <Checkbox
+            size="small"
+            checked={showCurrentOnly}
+            label={chrome.i18n.getMessage("scopeCurrentPage")}
+            onChange={(_e, data) => setShowCurrentOnly(Boolean(data.checked))}
+          />
+        </div>
         <Badge appearance="outline" color="informative" size="small">{chrome.i18n.getMessage("itemCount", [String(filteredResources.length)])}</Badge>
       </div>
 
       {filteredResources.length === 0 ? (
         <EmptyState
-          icon={scope === "current" ? <TabDesktopRegular /> : <WindowMultipleRegular />}
+          icon={showCurrentOnly ? <TabDesktopRegular /> : <WindowMultipleRegular />}
           title={emptyState.title}
           description={emptyState.description}
         />
