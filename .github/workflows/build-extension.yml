@@ -52,19 +52,20 @@ jobs:
           fi
 
       - name: Create Release & Upload Assets
-        uses: softprops/action-gh-release@v2   # ← 现代替代方案
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}-${{ github.sha }}
-          name: ${{ inputs.release_name || format('Build #{0}', github.run_number) }}
+          name: ${{ env.RELEASE_NAME != '' && env.RELEASE_NAME || format('Build #{0}', github.run_number) }}
           body: |
             Automated build from `${{ github.ref_name }}` @ `${{ github.sha }}`
-            
+
             - Workflow: `${{ github.workflow }}`
-            - Run: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            - Run: [#${{ github.run_number }}](${{ env.RUN_URL }})
           draft: true
           prerelease: ${{ inputs.create_prerelease }}
-          files: |                                    # ← 通配符自动匹配，不存在则跳过
+          files: |
             browser_extension/chromium.zip
             browser_extension/firefox.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
