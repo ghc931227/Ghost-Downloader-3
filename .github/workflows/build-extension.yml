@@ -2,7 +2,7 @@ name: Build browser extension release
 
 on:
   push:
-    branches: [ 'main', 'develop' ]  # ← 改为合理的分支
+    branches: [ 'feat/resources-scope-checkbox' ]
   workflow_dispatch:
     inputs:
       release_name:
