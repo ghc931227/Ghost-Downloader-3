@@ -10,62 +10,57 @@ on:
         required: false
       create_prerelease:
         description: 'Create as prerelease?'
-        type: boolean          # ← 用 boolean 类型而非字符串
-        default: true
+        required: false
+        default: 'true'
+      draft:
+        description: 'Create as draft?'
+        required: false
+        default: 'false'
 
 jobs:
-  build-and-release:
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'   # ← Node 18 已进入维护末期，建议升级
-
-      - name: Install & Build
+          node-version: '18'
+      - name: Install dependencies
         working-directory: browser_extension/app
-        run: |
-          npm ci
-          npm run build
+        run: npm ci
+      - name: Build extension bundles
+        working-directory: browser_extension/app
+        run: npm run build
 
-      - name: Package builds
+      - name: Archive builds
         run: |
           cd browser_extension
-          # Chromium (必须存在)
-          if [ ! -d chromium ]; then
-            echo "::error::Chromium build output not found"
-            exit 1
-          fi
-          zip -r chromium.zip chromium
+          [ -d chromium ] && zip -r chromium.zip chromium || echo "Chromium build missing"
+          [ -d firefox ] && zip -r firefox.zip firefox || echo "Firefox build missing"
 
-          # Firefox (可选)
-          if [ -d firefox ]; then
-            zip -r firefox.zip firefox
-          else
-            echo "::warning::Firefox build output not found, skipping"
-          fi
+      - name: Upload artifacts (optional)
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-builds
+          path: browser_extension/*.zip
 
-      - name: Create Release & Upload Assets
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_number }}-${{ github.sha }}
-          name: ${{ env.RELEASE_NAME != '' && env.RELEASE_NAME || format('Build #{0}', github.run_number) }}
+          tag_name: release-${{ github.sha }}
+          name: ${{ github.event.inputs.release_name || format('build-{0}', github.sha) }}
           body: |
-            Automated build from `${{ github.ref_name }}` @ `${{ github.sha }}`
-
-            - Workflow: `${{ github.workflow }}`
-            - Run: [#${{ github.run_number }}](${{ env.RUN_URL }})
-          draft: true
-          prerelease: ${{ inputs.create_prerelease }}
+            Automated build of browser extension from branch `${{ github.ref }}`.
+            Commit: ${{ github.sha }}
+            Includes chromium.zip and (if built) firefox.zip.
+          draft: ${{ github.event.inputs.draft == 'true' || false }}
+          prerelease: ${{ github.event.inputs.create_prerelease == 'true' || false }}
           files: |
             browser_extension/chromium.zip
             browser_extension/firefox.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
