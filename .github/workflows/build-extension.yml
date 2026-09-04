@@ -1,0 +1,114 @@
+name: Build browser extension release
+
+on:
+  push:
+    branches: [ 'feat/resources-scope-checkbox' ]
+  workflow_dispatch:
+    inputs:
+      release_name:
+        description: 'Release name (optional)'
+        required: false
+      create_prerelease:
+        description: 'Create as prerelease?'
+        required: false
+        default: 'true'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies (app)
+        working-directory: browser_extension/app
+        run: npm ci
+
+      - name: Build extension bundles
+        working-directory: browser_extension/app
+        run: npm run build
+
+      - name: Archive chromium build
+        run: |
+          cd browser_extension
+          if [ -d chromium ]; then
+            rm -f chromium.zip
+            zip -r chromium.zip chromium
+            ls -lh chromium.zip
+          else
+            echo "Chromium build output not found: $(pwd)/chromium"
+            exit 1
+          fi
+
+      - name: Archive firefox build
+        run: |
+          cd browser_extension
+          if [ -d firefox ]; then
+            rm -f firefox.zip
+            zip -r firefox.zip firefox
+            ls -lh firefox.zip
+          else
+            echo "Firefox build output not found: $(pwd)/firefox"
+            # don't fail — firefox build is optional in some configs
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromium-build
+          path: browser_extension/chromium.zip
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        with:
+          tag_name: release-${{ github.sha }}
+          release_name: ${{ github.event.inputs.release_name || format('build-{0}', github.sha) }}
+          body: |
+            Automated build of browser extension from branch `${{ github.ref }}`.
+
+            Commit: ${{ github.sha }}
+
+            Includes chromium build as chromium.zip. If you need a signed .crx, see notes below.
+
+            Notes:
+            - Built by workflow: .github/workflows/build-extension.yml
+            - To produce a .crx you must provide a private key and a signing step; see repository README for details or add a CRX signing step.
+          draft: true
+          prerelease: ${{ github.event.inputs.create_prerelease == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload chromium.zip to Release
+        uses: svenstaro/upload-release-action@v3
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          release_id: ${{ steps.create_release.outputs.id }}
+          file: browser_extension/chromium.zip
+
+      - name: Upload firefox.zip to Release (if exists)
+        if: ${{ always() && (github.ref == 'refs/heads/feat/resources-scope-checkbox') }}
+        uses: svenstaro/upload-release-action@v3
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          release_id: ${{ steps.create_release.outputs.id }}
+          file: browser_extension/firefox.zip
+
+      - name: Output release URL
+        run: |
+          echo "Release created: ${{ steps.create_release.outputs.html_url }}"
+
+# Optional: CRX signing
+# This workflow creates a chromium.zip artifact and a draft GitHub release. Producing a signed
+# .crx requires a private key (PEM) and a packing tool. You can add a step to build a .crx if you
+# add a repository secret named CRX_PRIVATE_KEY (base64-encoded PEM file) and install a CLI tool
+# capable of packing CRX (eg. `crx` or using chrome --pack-extension). For safety the workflow
+# currently does not attempt to sign without explicit configuration.
