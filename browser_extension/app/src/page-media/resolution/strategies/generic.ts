@@ -44,5 +44,11 @@ export function selectGeneric(ctx: ResolveContext): Resolution {
     }
     return { kind: "selection", selection: { kind: "single", url: stripRangeParams(only.url), formKind: "unknown" } };
   }
-  return { kind: "refused", message: chrome.i18n.getMessage("errorMultipleMediaFound") };
+
+  // Previously we refused when multiple candidate URLs were present and asked the user
+  // to pick from the resource probe page. To support the in-overlay multi-item selector
+  // we return a selection that contains multiple single selections. The download-button
+  // overlay will render these as a clickable list and send the chosen item.
+  const multipleSelections = post.map((entry) => ({ kind: "single" as const, url: stripRangeParams(entry.url), formKind: "unknown" }));
+  return { kind: "selection", selection: multipleSelections as unknown as any };
 }
