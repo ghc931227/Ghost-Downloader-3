@@ -88,19 +88,25 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload chromium.zip to Release
-        uses: svenstaro/upload-release-action@v3
+        uses: actions/upload-release-asset@v1
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          release_id: ${{ steps.create_release.outputs.id }}
-          file: browser_extension/chromium.zip
-
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: browser_extension/chromium.zip
+          asset_name: chromium.zip
+          asset_content_type: application/zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
       - name: Upload firefox.zip to Release (if exists)
-        if: ${{ always() && (github.ref == 'refs/heads/feat/resources-scope-checkbox') }}
-        uses: svenstaro/upload-release-action@v3
+        if: ${{ always() && hashFiles('browser_extension/firefox.zip') != '' }}
+        uses: actions/upload-release-asset@v1
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          release_id: ${{ steps.create_release.outputs.id }}
-          file: browser_extension/firefox.zip
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: browser_extension/firefox.zip
+          asset_name: firefox.zip
+          asset_content_type: application/zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Output release URL
         run: |
