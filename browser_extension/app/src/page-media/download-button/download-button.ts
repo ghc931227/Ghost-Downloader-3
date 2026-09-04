@@ -166,6 +166,8 @@ const FADE_DURATION_MS = 300;
     clearTimeout(idleTimer);
   });
 
+  // Restore original behavior: on mouseleave we schedule hide via idle timer so list/button
+  // follow the same show/hide timing as the button itself.
   host.addEventListener("mouseleave", () => {
     isHoveringButton = false;
     resetIdleTimer();
@@ -230,6 +232,8 @@ const FADE_DURATION_MS = 300;
       document.documentElement.appendChild(host);
     }
     document.addEventListener("mousemove", onMouseMove, { passive: true });
+    // global click/capture listener to hide on outside click immediately
+    document.addEventListener("mousedown", onDocumentPointerDown, true);
     if (positionTimer) { clearInterval(positionTimer); }
     positionTimer = window.setInterval(() => {
       if (isVisible) { scheduleUpdate(); }
@@ -241,6 +245,7 @@ const FADE_DURATION_MS = 300;
     hideButton();
     host.remove();
     document.removeEventListener("mousemove", onMouseMove);
+    document.removeEventListener("mousedown", onDocumentPointerDown, true);
     clearTimeout(idleTimer);
     if (positionTimer) {
       clearInterval(positionTimer);
@@ -301,6 +306,10 @@ const FADE_DURATION_MS = 300;
   // Selection list container (inserted into shadow root). We create/destroy on demand.
   let listContainer: HTMLElement | null = null;
   let listHideTimer = 0;
+  let listOpen = false;  // track whether selection list is visible
+  let listOpening = false;
+  let lastClickTs = 0;
+
   function ensureListContainer() {
     if (listContainer) return listContainer;
     listContainer = document.createElement("div");
@@ -350,10 +359,15 @@ const FADE_DURATION_MS = 300;
     if (!listContainer) return;
     if (listContainer.parentElement) listContainer.remove();
     listContainer = null;
+    listOpen = false;
+    listOpening = false;
     clearTimeout(listHideTimer);
+    (button as HTMLButtonElement).disabled = false;
   }
 
   function showSelectionList(items: Array<any>, sendOneSelection: (sel: any) => Promise<boolean>) {
+    if (listOpening) return;
+    listOpening = true;
     const container = ensureListContainer();
     container.innerHTML = "";
     for (const it of items) {
@@ -399,7 +413,31 @@ const FADE_DURATION_MS = 300;
     }
 
     clearTimeout(listHideTimer);
+    // keep list visible until user clicks outside — but still auto-hide as fallback
     listHideTimer = window.setTimeout(() => hideListContainer(), 10000);
+    listOpen = true;
+    listOpening = false;
+    (button as HTMLButtonElement).disabled = true;
+  }
+
+  // Close the list immediately when clicking outside host/list
+  function onDocumentPointerDown(ev: MouseEvent) {
+    try {
+      const path = ev.composedPath ? ev.composedPath() : (ev as any).path || [];
+      // If click is inside host or inside the list container, do nothing
+      for (const node of path as any[]) {
+        if (!node) continue;
+        if (node === host) return;
+        if (node === listContainer) return;
+        // If node is shadow root child, allow containment check
+        if (node instanceof Element && node.getRootNode && (node.getRootNode() as ShadowRoot).host === host) return;
+      }
+    } catch {
+      // fall through
+    }
+    // click outside — hide immediately
+    hideListContainer();
+    hideButton();
   }
 
   let downloadInFlight = false;
@@ -466,7 +504,20 @@ const FADE_DURATION_MS = 300;
         setStatus(ok ? chrome.i18n.getMessage("sent") : chrome.i18n.getMessage("errorSendFailed"), !ok);
       } else {
         // 多个资源：展示列表而不是弹提示
-        showSelectionList(selectionArray, sendSingle);
+        const now = Date.now();
+        if (now - lastClickTs < 250) {
+          // debounce: ignore very quick repeated clicks
+          return;
+        }
+        lastClickTs = now;
+
+        // If the list is already open, toggle (close). If it's currently opening, ignore.
+        if (listOpening) return;
+        if (listOpen) {
+          hideListContainer();
+        } else {
+          showSelectionList(selectionArray, sendSingle);
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : chrome.i18n.getMessage("errorSendFailed");
@@ -483,6 +534,7 @@ const FADE_DURATION_MS = 300;
     event.preventDefault();
     event.stopPropagation();
     dismissed = true;
+    hideListContainer();
     hideButton();
   });
 
